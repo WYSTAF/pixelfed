@@ -4,8 +4,13 @@ use App\Models\Follower;
 use App\Models\Profile;
 use App\Models\User;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
+use Illuminate\Support\Facades\Redis;
 
 uses(LazilyRefreshDatabase::class);
+
+beforeEach(function () {
+    Redis::spy();
+});
 
 /*
 |--------------------------------------------------------------------------
