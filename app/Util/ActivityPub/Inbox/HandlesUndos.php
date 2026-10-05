@@ -2,6 +2,7 @@
 
 namespace App\Util\ActivityPub\Inbox;
 
+use App\Jobs\FollowPipeline\UnfollowPipeline;
 use App\Jobs\HomeFeedPipeline\FeedRemoveRemotePipeline;
 use App\Models\Follower;
 use App\Models\FollowRequest;
@@ -119,6 +120,16 @@ trait HandlesUndos
         ]);
 
         FollowerService::remove($profile->id, $following->id);
+
+        /*
+         * Dispatched here as well as clearing Redis inline: UnfollowPipeline is
+         * the only thing that corrects the denormalized counters on the unfollow
+         * path, and this handler deleted the Follower row without it, so an
+         * incoming Undo Follow left following_count/followers_count reading one
+         * higher than reality (pixelfed#7601).
+         */
+        UnfollowPipeline::dispatch($profile->id, $following->id)->onQueue('high');
+
         RelationshipService::refresh($following->id, $profile->id);
         $this->clearAccountCache($profile->id, $following->id);
     }
