@@ -43,8 +43,16 @@ trait HandlesLikes
         ]);
 
         if ($like->wasRecentlyCreated == true) {
-            $status->likes_count = $status->likes_count + 1;
-            $status->save();
+            /*
+             * Atomic increment, not a read-modify-write on the model. Two
+             * likes federated for the same post at the same time both read the
+             * same likes_count here, and the loser's write dropped one --
+             * undercounting the post for good, since nothing recounts it.
+             * This is the same call the local like path uses
+             * (ApiV1Controller::statusFavourite).
+             */
+            $status->increment('likes_count');
+
             LikePipeline::dispatch($like);
         }
     }
