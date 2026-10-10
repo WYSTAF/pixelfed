@@ -79,7 +79,14 @@ class ProfileMigrationMoveFollowersPipeline implements ShouldBeUniqueUntilProces
         if (! $og || ! $ne || $og == $ne) {
             return;
         }
-        $ne->followers_count = $og->followers_count;
+        /*
+         * Counted from the followers table rather than copied from the old
+         * profile: the rows are about to be reassigned below, and copying the
+         * column would carry over any drift the old profile already had instead
+         * of fixing it. Setting the old profile to 0 is right -- its followers
+         * have all moved to the new profile.
+         */
+        $ne->followers_count = Follower::whereFollowingId($this->oldPid)->count();
         $ne->save();
         $og->followers_count = 0;
         $og->save();
