@@ -2,6 +2,7 @@
 
 namespace App\Util\ActivityPub\Inbox;
 
+use App\Jobs\FollowPipeline\UnfollowPipeline;
 use App\Jobs\HomeFeedPipeline\FeedRemoveRemotePipeline;
 use App\Models\Follower;
 use App\Models\FollowRequest;
@@ -119,6 +120,16 @@ trait HandlesUndos
         ]);
 
         FollowerService::remove($profile->id, $following->id);
+
+        /*
+         * Dispatched here as well as clearing Redis inline: UnfollowPipeline is
+         * the only thing that corrects the denormalized counters on the unfollow
+         * path, and this handler deleted the Follower row without it, so an
+         * incoming Undo Follow left following_count/followers_count reading one
+         * higher than reality (pixelfed#7601).
+         */
+        UnfollowPipeline::dispatch($profile->id, $following->id)->onQueue('high');
+
         RelationshipService::refresh($following->id, $profile->id);
         $this->clearAccountCache($profile->id, $following->id);
     }
@@ -149,9 +160,24 @@ trait HandlesUndos
             ->whereStatusId($status->id)
             ->forceDelete();
 
-        if ($deleted > 0 && $status->likes_count > 0) {
-            $status->likes_count -= 1;
-            $status->saveQuietly();
+        if ($deleted > 0) {
+            /*
+             * Atomic decrement, with the > 0 guard moved into the WHERE clause
+             * so the column can never go negative. The in-PHP guard was a
+             * read-then-write: two unlike activities for the same post could
+             * both read likes_count == 1, both pass the check and both write 0
+             * while only one Like row existed -- or a like federated in between
+             * the read and the write and got clobbered.
+             *
+             * decrement() fires no model events, so there is nothing to
+             * suppress here the way saveQuietly() did; the statement is the
+             * whole update.
+             */
+            $status->newQuery()
+                ->whereKey($status->id)
+                ->where('likes_count', '>', 0)
+                ->decrement('likes_count');
+
             StatusService::del($status->id);
         }
 

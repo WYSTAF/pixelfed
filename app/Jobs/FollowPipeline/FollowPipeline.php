@@ -57,15 +57,18 @@ class FollowPipeline implements ShouldQueue
             return;
         }
 
-        if ($target->domain || ! $target->private_key) {
-            return;
-        }
-
         Cache::forget('profile:following:'.$actor->id);
         Cache::forget('profile:following:'.$target->id);
 
         FollowerService::add($actor->id, $target->id);
 
+        /*
+         * The denormalized counters have to be refreshed for every follow,
+         * including remote targets. This job used to return early for those
+         * before touching them, so a follow of a remote account left
+         * following_count/followers_count at whatever they were, and the
+         * profile page kept rendering a stale 0 (pixelfed#7601).
+         */
         $count = Follower::whereProfileId($actor->id)->count();
         $actor->following_count = $count;
         $actor->save();
@@ -75,6 +78,15 @@ class FollowPipeline implements ShouldQueue
         $target->followers_count = $count;
         $target->save();
         AccountService::del($target->id);
+
+        /*
+         * Everything past this point is local-only bookkeeping: a remote target
+         * has no local key to sign with, and pushing follow notifications at a
+         * remote profile would notify the wrong audience.
+         */
+        if ($target->domain || ! $target->private_key) {
+            return;
+        }
 
         if ($target->user_id && $target->domain === null) {
             try {
