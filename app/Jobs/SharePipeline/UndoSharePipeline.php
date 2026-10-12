@@ -41,11 +41,20 @@ class UndoSharePipeline implements ShouldQueue
             $target = $parent->profile_id;
             ReblogService::removePostReblog($parent->profile_id, $status->id);
 
-            if ($parent->reblogs_count > 0) {
-                $parent->reblogs_count = $parent->reblogs_count - 1;
-                $parent->save();
-                StatusService::del($parent->id);
-            }
+            /*
+             * Atomic decrement with the zero floor moved into the WHERE
+             * clause. The old pair -- `if ($parent->reblogs_count > 0)` then
+             * `$parent->reblogs_count = $parent->reblogs_count - 1` -- read
+             * the value into the model and wrote back a number computed from
+             * it, so two concurrent undos could both read 1, both write 0
+             * while one share row existed, or drive the column negative if a
+             * share federated in between the read and the write.
+             */
+            Status::whereId($parent->id)
+                ->where('reblogs_count', '>', 0)
+                ->decrement('reblogs_count');
+
+            StatusService::del($parent->id);
 
             $notification = Notification::whereProfileId($target)
                 ->whereActorId($status->profile_id)
