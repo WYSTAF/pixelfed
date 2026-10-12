@@ -202,10 +202,17 @@ class Profile extends Model
 
     public function followingCount($short = false)
     {
+        /*
+         * The privacy gate is applied outside the cached closure on purpose.
+         * It used to sit inside, so a 0 returned while the count was hidden
+         * got written to the cache and then stayed there for the full month
+         * TTL, even after the setting was turned back on.
+         */
+        if ($this->hidesFollowCount('show_profile_following_count')) {
+            return 0;
+        }
+
         $count = Cache::remember('profile:following_count:'.$this->id, now()->addMonths(1), function () {
-            if ($this->domain == null && $this->user->settings->show_profile_following_count == false) {
-                return 0;
-            }
             $count = DB::table('followers')->where('profile_id', $this->id)->count();
             if ($this->following_count != $count) {
                 $this->following_count = $count;
@@ -220,10 +227,11 @@ class Profile extends Model
 
     public function followerCount($short = false)
     {
+        if ($this->hidesFollowCount('show_profile_follower_count')) {
+            return 0;
+        }
+
         $count = Cache::remember('profile:follower_count:'.$this->id, now()->addMonths(1), function () {
-            if ($this->domain == null && $this->user->settings->show_profile_follower_count == false) {
-                return 0;
-            }
             $count = DB::table('followers')->where('following_id', $this->id)->count();
             if ($this->followers_count != $count) {
                 $this->followers_count = $count;
@@ -234,6 +242,26 @@ class Profile extends Model
         });
 
         return $short ? PrettyNumber::convert($count) : $count;
+    }
+
+    /**
+     * Whether this local profile has opted out of showing one of its follow
+     * counts. Remote profiles are never gated: the setting belongs to the
+     * remote user and is not mirrored here.
+     *
+     * A User can legitimately have no user_settings row (hasOne is nullable,
+     * no FK/backfill guarantee), so the relation is null-checked rather than
+     * dereferenced. A missing row means the default, which is to show.
+     */
+    private function hidesFollowCount(string $setting): bool
+    {
+        if ($this->domain !== null) {
+            return false;
+        }
+
+        $settings = $this->user?->settings;
+
+        return $settings !== null && $settings->$setting == false;
     }
 
     public function statusCount()
