@@ -73,9 +73,18 @@ trait HandlesUndos
             ->whereReblogOfId($status->id)
             ->forceDelete();
 
+        /*
+         * Atomic decrement with the zero floor moved into the WHERE
+         * clause. The old code read reblogs_count into the model and
+         * wrote back a number computed from it, so two concurrent
+         * undos could both read 1, both write 0 while one share row
+         * existed, or drive the column negative if a share federated
+         * in between the read and the write.
+         */
         if ($status->reblogs_count) {
-            $status->reblogs_count -= 1;
-            $status->saveQuietly();
+            Status::whereId($status->id)
+                ->where('reblogs_count', '>', 0)
+                ->decrement('reblogs_count');
         }
 
         ReblogService::removePostReblog($profile->id, $status->id);
