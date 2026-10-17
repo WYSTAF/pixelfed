@@ -85,8 +85,12 @@ class StatusEntityLexer implements ShouldQueue
         }
 
         if (in_array($status->type, AccountStatService::COUNTABLE_STATUS_TYPES)) {
-            $profile->status_count = $profile->status_count + 1;
-            $profile->save();
+            /*
+             * Atomic increment instead of read-modify-write on the model.
+             * Two concurrent statuses for the same profile could both read
+             * the same status_count and one increment would be lost.
+             */
+            Profile::whereId($profile->id)->increment('status_count');
         }
 
         if ($profile->no_autolink == false) {
