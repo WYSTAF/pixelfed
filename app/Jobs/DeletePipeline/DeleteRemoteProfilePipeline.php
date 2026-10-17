@@ -30,6 +30,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class DeleteRemoteProfilePipeline implements ShouldQueue
@@ -109,10 +110,22 @@ class DeleteRemoteProfilePipeline implements ShouldQueue
             ->orWhere('follower_id', $pid)
             ->delete();
 
+        /*
+         * Collect the counterparties before the rows go. A bulk delete fires no
+         * observer, so nothing would revisit these accounts and every local
+         * profile that followed -- or was followed by -- this remote account
+         * kept a phantom count forever, since the profile page reads the stored
+         * column (AccountTransformer) and never recomputes it.
+         */
+        $followerIds = Follower::whereProfileId($pid)->pluck('following_id')->all();
+        $followeeIds = Follower::whereFollowingId($pid)->pluck('profile_id')->all();
+
         // Delete relationships
         Follower::whereProfileId($pid)
             ->orWhere('following_id', $pid)
             ->delete();
+
+        $this->resyncFollowCounts($pid, $followerIds, $followeeIds);
 
         // Delete likes
         Like::whereProfileId($pid)->forceDelete();
@@ -167,5 +180,42 @@ class DeleteRemoteProfilePipeline implements ShouldQueue
         Profile::findOrFail($profile->id)->delete();
 
         return 1;
+    }
+
+    /**
+     * Recompute the follower/following counters of every profile that had a
+     * relationship with the deleted one, and drop their cached copies.
+     *
+     * Done inline rather than by dispatching UnfollowPipeline per row: the
+     * list can be large, and each of those jobs would issue its own count
+     * query. Recomputing here also covers the profiles that are about to be
+     * deleted further down, which is why it runs before Profile::delete().
+     *
+     * @param  array<int>  $followerIds  profiles that followed the deleted one
+     * @param  array<int>  $followeeIds  profiles the deleted one followed
+     */
+    private function resyncFollowCounts(int $pid, array $followerIds, array $followeeIds): void
+    {
+        // $pid itself is deleted later in handle(); skip it here.
+        $ids = collect(array_merge($followerIds, $followeeIds))
+            ->filter(fn ($id) => (int) $id !== $pid)
+            ->unique()
+            ->values();
+
+        foreach ($ids as $id) {
+            $profile = Profile::find($id);
+
+            if (! $profile) {
+                continue;
+            }
+
+            $profile->followers_count = Follower::whereFollowingId($id)->count();
+            $profile->following_count = Follower::whereProfileId($id)->count();
+            $profile->save();
+
+            Cache::forget('profile:follower_count:'.$id);
+            Cache::forget('profile:following_count:'.$id);
+            AccountService::del($id);
+        }
     }
 }

@@ -215,8 +215,12 @@ class TransformImports extends Command
 
                     $ip->save();
 
-                    $profile->status_count = $profile->status_count + 1;
-                    $profile->save();
+                    /*
+                     * Atomic increment instead of read-modify-write on the model.
+                     * Two concurrent imports for the same profile could both read
+                     * the same status_count and one increment would be lost.
+                     */
+                    Profile::whereId($profile->id)->increment('status_count');
                 };
 
                 // A concurrent import can win the statuses.id insert race,
