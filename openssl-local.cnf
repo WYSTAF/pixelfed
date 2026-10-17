@@ -1,0 +1,17 @@
+# Minimal OpenSSL config for running the Pixelfed test suite on Windows.
+#
+# The winget PHP build's bundled extras/ssl/openssl.cnf sets
+# `dir = ./demoCA` with `config_diagnostics = 1`, and that directory does not
+# exist, so openssl_pkey_new() fails outright ("Cannot get key from
+# parameter 1") and UserObserver's RSA key generation dies. Key generation
+# needs no CA material, so this config only loads the default provider.
+
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_sect
+
+[provider_sect]
+default = default_sect
+
+[default_sect]
